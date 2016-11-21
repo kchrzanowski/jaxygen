@@ -1,9 +1,14 @@
 package org.jaxygen.apibrowser.pages;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import javax.naming.NamingException;
 import javax.servlet.ServletContext;
@@ -26,7 +31,7 @@ public class MethodInvokerPage extends Page {
   public static final String NAME = "MethodInvokerPage";
 
   public MethodInvokerPage(ServletContext context,
-          HttpServletRequest request, String classRegistry, String beansPath) throws NamingException, IllegalArgumentException, SecurityException, InstantiationException, IllegalAccessException, InvocationTargetException, NoSuchMethodException, ClassNotFoundException, IOException, ServletException {
+          HttpServletRequest request, String classRegistry, String beansPath) throws NamingException, IllegalArgumentException, SecurityException, InstantiationException, IllegalAccessException, InvocationTargetException, NoSuchMethodException, ClassNotFoundException, IOException, ServletException, NoSuchFieldException {
     super(context, request, classRegistry, beansPath);
     final String className = request.getParameter("className");
     final String method = request.getParameter("methodName");
@@ -41,13 +46,21 @@ public class MethodInvokerPage extends Page {
   private boolean isSimpleResultType(final Class<?> returnType) {
     return returnType.isPrimitive() || returnType.equals(Integer.class) || returnType.equals(Double.class) || returnType.equals(Float.class) || returnType.equals(String.class) || returnType.equals(double.class) || returnType.equals(float.class);
   }
+  
+  private static String removePathContextFromClassName(final String className, final String beansPath) {
+      String simpleClassname = className.substring(beansPath.length());
+      if (className.startsWith(".")) {
+          simpleClassname = simpleClassname.substring(1);
+      }
+      return simpleClassname;
+  }
 
   private void renderClassForm(HttpServletRequest request, final String classFilter, final String methodFilter)
           throws NamingException, IllegalArgumentException, SecurityException,
           InstantiationException, IllegalAccessException,
-          InvocationTargetException, NoSuchMethodException, ClassNotFoundException, IOException {
+          InvocationTargetException, NoSuchMethodException, ClassNotFoundException, IOException, NoSuchFieldException {
 
-    final String simpleClassname = classFilter.substring(beansPath.length() + 1);
+    final String simpleClassname = removePathContextFromClassName(classFilter, beansPath);
     HTMLTable exceptionsTable = new HTMLTable();
     exceptionsTable.getHeader().addColumn(new HTMLTable.HeadColumn(new HTMLLabel("Exception name")));
     exceptionsTable.getHeader().addColumn(new HTMLTable.HeadColumn(new HTMLLabel("Description")));
@@ -110,9 +123,12 @@ public class MethodInvokerPage extends Page {
               .append("    event.preventDefault();\n")
               .append("    sendData();\n")
               .append("  });\n")
+              .append("\n")
+              .append("  handleAnchors(form);\n")
+              .append("\n")
               .append("});\n");
       sb.append("</script>");
-      
+
       return sb.toString();
     });
     mainDiv.append(new HTMLHeading(HTMLHeading.Level.H2, new HTMLLabel("Return type")));
@@ -122,7 +138,8 @@ public class MethodInvokerPage extends Page {
 
     Page page = this;
     // append script responsible for saving files
-    page.append((HTMLElement) () -> "<script type=\"application/ecmascript\" async src=\"http://eligrey.com/demos/FileSaver.js/FileSaver.js\"></script>");
+    page.append((HTMLElement) () -> "<script type=\"application/ecmascript\" async src=\"js/FileSaver.js\"></script>");
+    page.append((HTMLElement) () -> "<script type=\"application/ecmascript\" async src=\"js/AnchorUpdater.js\"></script>");
     // append script responsible for sending data to service
     page.append((HTMLElement) () -> {
       StringBuilder sb = new StringBuilder("<script type=\"text/javascript\">");
@@ -222,7 +239,7 @@ public class MethodInvokerPage extends Page {
           if (type instanceof Class<?>) {
             Class<?> paramClass = (Class<?>) type;
             for (Method setter : paramClass.getMethods()) {
-              if (setter.getName().startsWith("set")) {
+              if (setter.getName().startsWith("set") && !"set".equals(setter.getName())) {
                 final String fieldName = setter.getName().substring(3);
                 if (fieldName != null) {
                   result[3] = "ok";
@@ -323,6 +340,30 @@ public class MethodInvokerPage extends Page {
     return clazz.isArray();
   }
 
+  private Class<?> retrieveListType(Class<?> paramClass, String propertyName) {
+    Class c = paramClass;
+    Field listField = null;
+    String name = c.getName();
+    while (listField == null || "java.lang.Object".equals(name)) {
+      try {
+        listField = c.getDeclaredField(propertyName);
+      } catch (Exception e) {
+        c = c.getSuperclass();
+      }
+    }
+    Type genericPropertyType = listField.getGenericType();
+    
+    ParameterizedType propertyType = null;
+    while (propertyType == null) {
+      if ((genericPropertyType instanceof ParameterizedType)) {
+        propertyType = (ParameterizedType) genericPropertyType;
+      } else {
+        genericPropertyType = ((Class<?>) genericPropertyType).getGenericSuperclass();
+      }
+    }
+    return (Class<?>) propertyType.getActualTypeArguments()[0];
+  }
+
   /**
    * Add list of parameters from bean class passed in the parameter paramClass
    * as a list of rows to the table.
@@ -338,10 +379,11 @@ public class MethodInvokerPage extends Page {
   private void addInputClassParameters(HttpServletRequest request,
           HTMLTable table, Class<?> paramClass, final String parentFieldName)
           throws InstantiationException, IllegalAccessException,
-          InvocationTargetException, NoSuchMethodException {
+          InvocationTargetException, NoSuchMethodException, NoSuchFieldException {
     Object inputObject = paramClass.getConstructor().newInstance();
     for (Method setter : paramClass.getMethods()) {
-      if (setter.getName().startsWith("set")) {
+      String setterName = setter.getName();
+      if (!"set".equals(setterName) && setter.getName().startsWith("set")) {
         final String fieldName = setter.getName().substring(3);
         Method getter = paramClass.getMethod("get" + fieldName);
         Object defaultValue = "";
@@ -355,7 +397,25 @@ public class MethodInvokerPage extends Page {
         if (getter != null) {
           defaultValue = getter.invoke(inputObject);
         }
-        if (paramType.isArray()) {
+        if (paramType.isAssignableFrom(HashMap.class)) {
+          System.out.println("I am in hash map :)");
+        } else if (paramType.isAssignableFrom(ArrayList.class) || paramType.isAssignableFrom(LinkedList.class) || (List.class).isAssignableFrom(paramType)) {
+          final String counterName = parentFieldName + propertyName + "Size";
+          int multiplicity = 0;
+          if (request.getParameter(counterName) != null) {
+            multiplicity = Integer.parseInt(request.getParameter(counterName));
+          }
+          Class<?> componentType = retrieveListType(paramClass, propertyName);
+          if (multiplicity == 0) {
+            renderFieldInputRow(request, table, parentFieldName + propertyName
+                    + "[]", counterName, null, componentType, 0);
+          } else {
+            for (int i = 0; i < multiplicity; i++) {
+              String newFieldName = parentFieldName + propertyName + "[" + i + "]";
+              renderFieldInputRow(request, table, newFieldName, counterName, null, componentType, multiplicity); //TODO: add heredefault value object
+            }
+          }
+        } else if (paramType.isArray()) {
           final String counterName = parentFieldName + propertyName + "Size";
           int multiplicity = 0;
           if (request.getParameter(counterName) != null) {
@@ -398,7 +458,7 @@ public class MethodInvokerPage extends Page {
   private void renderFieldInputRow(HttpServletRequest request, HTMLTable table,
           final String fieldName, final String counterName, Object defaultValue,
           Class<?> paramType, int multiplicity) throws InstantiationException,
-          IllegalAccessException, InvocationTargetException, NoSuchMethodException {
+          IllegalAccessException, InvocationTargetException, NoSuchMethodException, NoSuchFieldException {
     HTMLTable.Row row = new HTMLTable.Row();
     String propertyName = fieldName;
     row.addColumn(new HTMLLabel(paramType.getCanonicalName()));
@@ -429,16 +489,14 @@ public class MethodInvokerPage extends Page {
     if (queryMultiplicityUp.getParameters().containsKey(counterName) == false) {
       queryMultiplicityUp.add(counterName, "" + (multiplicity + 1));
     }
-
     if (multiplicity >= 0) {
-      row.addColumn(new HTMAnchor("" + browserPath + "?" + queryMultiplicityUp.toString(),
+      row.addColumn(new HTMAnchor("P" + propertyName, "anchor", "" + browserPath + "?" + queryMultiplicityUp.toString(),
               new HTMLLabel("+")));
-
     } else {
       row.addColumn(new HTMLLabel(""));
     }
     if (multiplicity >= 1) {
-      row.addColumn(new HTMAnchor("" + browserPath + "?" + queryMultiplicityDown.toString(),
+      row.addColumn(new HTMAnchor("M" + propertyName, "anchor", "" + browserPath + "?" + queryMultiplicityDown.toString(),
               new HTMLLabel("-")));
     } else {
       row.addColumn(new HTMLLabel(""));
@@ -454,12 +512,21 @@ public class MethodInvokerPage extends Page {
         row.addColumn(select);
       } else if (paramType.isEnum()) {
         HTMLSelect select = new HTMLSelect(propertyName);
-        for (Object name : paramType.getEnumConstants()) {
-          select.addOption(new HTMLOption(name.toString(), new HTMLLabel(name.toString())));
+        String parameterName = propertyName + "_Value";
+        Object value = request.getParameter(parameterName);
+        for (Object obj : paramType.getEnumConstants()) {
+          String name = obj.toString();
+          HTMLOption htmlOptions = new HTMLOption(name, new HTMLLabel(name));
+          boolean isSelected = value != null && name.equals(value.toString());
+          htmlOptions.setSelected(isSelected);
+          select.addOption(htmlOptions);
         }
         row.addColumn(select);
       } else if (PropertiesToBeanConverter.isCovertable(paramType)) {
-        row.addColumn(new HTMLInput(propertyName, defaultValue));
+        String parameterName = propertyName + "_Value";
+        Object value = request.getParameter(parameterName);
+        Object v = value != null ? value : defaultValue;
+        row.addColumn(new HTMLInput(propertyName, propertyName, "INPUT_FIELD", v));
       } else if (paramType.isAssignableFrom(Uploadable.class)) {
         row.addColumn(new HTMLInput(HTMLInput.Type.file, propertyName));
       } else {

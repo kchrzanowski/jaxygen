@@ -14,7 +14,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
-import org.apache.commons.io.IOUtils;
 import org.jaxygen.annotations.ClientIp;
 import org.jaxygen.annotations.NetAPI;
 import org.jaxygen.annotations.RequestURL;
@@ -78,6 +77,14 @@ public class ServiceInvoker extends HttpServlet {
     beensPath = config.getInitParameter(SERVICE_PATH);
   }
   
+  private String buildClassName(final String servicesRoot, final String className) {
+      String fullClassName = className;
+      if (!servicesRoot.isEmpty()) {
+          fullClassName = servicesRoot + "." + className;
+      }
+      return fullClassName;
+  }
+  
   @Override
   protected void doGet(HttpServletRequest request,
           HttpServletResponse response) throws ServletException, IOException {
@@ -120,7 +127,7 @@ public class ServiceInvoker extends HttpServlet {
       throw new ServletException("Invalid '" + resourcePath + "' request, must be in format class/method");
     }
     final String methodName = chunks[chunks.length - 1];
-    final String className = beensPath + "." + chunks[chunks.length - 2];
+    final String className = buildClassName(beensPath, chunks[chunks.length - 2]);
     
     ClassLoader cl = Thread.currentThread().getContextClassLoader();
     Method[] methods;
